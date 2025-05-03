@@ -7,45 +7,113 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Dimensions,
+  Alert,
+  RefreshControl,
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
-import { getPortfolioSummary, getRecommendations } from '../services/mockApi';
+import { getRecommendations } from '../services/mockApi'; // Still use mock recommendations for now
+import apiService from '../services/apiService';
 import LogoutButton from '../components/LogoutButton';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
 const DashboardScreen = () => {
   const { phoneNumber } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [portfolioData, setPortfolioData] = useState<any>(null);
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState('portfolio');
+  const [consentId, setConsentId] = useState<string | null>(null);
+  const [hasActiveConsent, setHasActiveConsent] = useState(false);
+  const [noAccountsFound, setNoAccountsFound] = useState(false);
 
+  // Fetch active consent and its financial data
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Fetch portfolio data and recommendations in parallel
-        const [portfolioResponse, recommendationsResponse] = await Promise.all([
-          getPortfolioSummary(),
-          getRecommendations()
-        ]);
-
-        if (portfolioResponse.success && portfolioResponse.data) {
-          setPortfolioData(portfolioResponse.data);
-        }
-
-        if (recommendationsResponse.success && recommendationsResponse.data) {
-          setRecommendations(recommendationsResponse.data);
-        }
-      } catch (error) {
-        console.error('Error fetching data:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchData();
+    fetchConsentAndData();
   }, []);
+
+  const fetchConsentAndData = async () => {
+    try {
+      setIsLoading(true);
+      // Check if user has an active consent
+      const consentResponse = await apiService.consent.listConsents();
+      
+      let activeConsent = null;
+      if (consentResponse.success && consentResponse.consents) {
+        // Find an active consent
+        activeConsent = consentResponse.consents.find(consent => consent.status === 'active');
+        
+        if (activeConsent) {
+          setConsentId(activeConsent.id);
+          setHasActiveConsent(true);
+          
+          // Try to load financial data for this consent
+          await fetchFinancialData(activeConsent.id.toString());
+        } else {
+          setHasActiveConsent(false);
+        }
+      }
+      
+      // Always load recommendations (mock data for now)
+      const recommendationsResponse = await getRecommendations();
+      if (recommendationsResponse.success && recommendationsResponse.data) {
+        setRecommendations(recommendationsResponse.data);
+      }
+    } catch (error) {
+      console.error('Error fetching consent data:', error);
+      Alert.alert(
+        'Data Load Error',
+        'Unable to load your financial data. Please try again later.'
+      );
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
+  // Fetch financial data for a consent
+  const fetchFinancialData = async (id: string) => {
+    try {
+      // Check if we have existing account data
+      const userConsentActive = await AsyncStorage.getItem('userConsentActive');
+      const storedConsentId = await AsyncStorage.getItem('userConsentId');
+      
+      // If this is a different consent or we don't have data, initiate a fetch
+      if (userConsentActive !== 'true' || storedConsentId !== id) {
+        // Initiate a data fetch for this consent
+        await apiService.consent.fetchData(id);
+        
+        // Store that we've initiated a fetch for this consent
+        await AsyncStorage.setItem('userConsentActive', 'true');
+        await AsyncStorage.setItem('userConsentId', id);
+      }
+      // Now get the accounts for this consent
+      const accountsResponse = await apiService.financialData.getAccounts(id);
+      
+      if (accountsResponse.success && accountsResponse.accounts) {
+        if (accountsResponse.accounts.length > 0) {
+          // Transform account data to portfolio format
+          const portfolio = apiService.financialData.transformToPortfolio(accountsResponse.accounts);
+          setPortfolioData(portfolio);
+          setNoAccountsFound(false);
+        } else {
+          setNoAccountsFound(true);
+        }
+      } else {
+        setNoAccountsFound(true);
+      }
+    } catch (error) {
+      console.error('Error fetching financial data:', error);
+    }
+  };
+
+  // Pull-to-refresh handler
+  const onRefresh = () => {
+    setIsRefreshing(true);
+    fetchConsentAndData();
+  };
 
   const renderPortfolioTab = () => {
     if (!portfolioData) return null;
@@ -183,6 +251,44 @@ const DashboardScreen = () => {
     );
   }
 
+  // Render no consent message
+  const renderNoConsentMessage = () => {
+    return (
+      <View style={styles.messageContainer}>
+        <Text style={styles.messageTitle}>Account Access Required</Text>
+        <Text style={styles.messageText}>
+          To see your financial data, you need to provide consent for account access.
+          Please visit the PAN Verification screen to give consent.
+        </Text>
+        <TouchableOpacity 
+          style={styles.actionButton}
+          onPress={() => {/* Navigate to PAN screen */}}
+        >
+          <Text style={styles.actionButtonText}>Setup Account Access</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // Render waiting for data message
+  const renderWaitingForDataMessage = () => {
+    return (
+      <View style={styles.messageContainer}>
+        <Text style={styles.messageTitle}>Data Processing</Text>
+        <Text style={styles.messageText}>
+          We're currently processing your financial data. This might take a few minutes.
+          Pull down to refresh and check for updates.
+        </Text>
+        <TouchableOpacity 
+          style={styles.actionButton}
+          onPress={onRefresh}
+        >
+          <Text style={styles.actionButtonText}>Refresh Now</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -209,8 +315,21 @@ const DashboardScreen = () => {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.scrollContent}>
-        {activeTab === 'portfolio' ? renderPortfolioTab() : renderRecommendationsTab()}
+      <ScrollView 
+        style={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            colors={['#0A2463']}
+          />
+        }
+      >
+        {activeTab === 'portfolio' ? (
+          !hasActiveConsent ? renderNoConsentMessage() :
+          noAccountsFound ? renderWaitingForDataMessage() :
+          renderPortfolioTab()
+        ) : renderRecommendationsTab()}
         
         <View style={styles.logoutButtonContainer}>
           <LogoutButton style={styles.fullWidthLogoutButton} />
@@ -293,6 +412,45 @@ const styles = StyleSheet.create({
   },
   tabContent: {
     padding: 20,
+  },
+  messageContainer: {
+    backgroundColor: '#FFFFFF',
+    margin: 20,
+    borderRadius: 10,
+    padding: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  messageTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0A2463',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  messageText: {
+    fontSize: 14,
+    color: '#666',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  actionButton: {
+    backgroundColor: '#0A2463',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 6,
+    width: '100%',
+    alignItems: 'center',
+  },
+  actionButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
   },
   portfolioSummary: {
     backgroundColor: '#FFFFFF',

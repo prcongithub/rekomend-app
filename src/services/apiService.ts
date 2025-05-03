@@ -217,10 +217,136 @@ export const consentService = {
     } catch (error) {
       return { success: false, message: (error as Error).message };
     }
+  },
+  
+  // Initiate data fetch for a consent
+  fetchData: async (consentId: string) => {
+    try {
+      const response = await request(
+        `${API_ENDPOINTS.FETCH_CONSENT_DATA}/${consentId}/data`,
+        'GET',
+        undefined,
+        true // Include auth token
+      );
+      
+      return {
+        success: response.success || false,
+        sessionId: response.data?.session_id,
+        message: response.message || 'Data fetch initiated successfully'
+      };
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
+    }
+  }
+};
+
+// Financial data services
+export const financialDataService = {
+  // Get all accounts for a consent
+  getAccounts: async (consentId: string) => {
+    try {
+      const response = await request(
+        `${API_ENDPOINTS.GET_ACCOUNTS}/${consentId}/accounts`,
+        'GET',
+        undefined,
+        true // Include auth token
+      );
+      
+      return {
+        success: response.success || false,
+        accounts: response.data?.accounts || [],
+        message: response.message || 'Accounts retrieved successfully'
+      };
+    } catch (error) {
+      return { success: false, accounts: [], message: (error as Error).message };
+    }
+  },
+  
+  // Get details for a specific account, including transactions and holdings
+  getAccountDetails: async (consentId: string, accountId: string) => {
+    try {
+      const response = await request(
+        `${API_ENDPOINTS.GET_ACCOUNT_DETAILS}/${consentId}/accounts/${accountId}`,
+        'GET',
+        undefined,
+        true // Include auth token
+      );
+      
+      return {
+        success: response.success || false,
+        account: response.data?.account,
+        transactions: response.data?.transactions || [],
+        holdings: response.data?.holdings || [],
+        message: response.message || 'Account details retrieved successfully'
+      };
+    } catch (error) {
+      return { 
+        success: false, 
+        account: null,
+        transactions: [],
+        holdings: [],
+        message: (error as Error).message 
+      };
+    }
+  },
+  
+  // Convert account data to portfolio format for the dashboard
+  transformToPortfolio: (accounts: any[]) => {
+    if (!accounts || accounts.length === 0) {
+      return null;
+    }
+    
+    // Initialize portfolio data structure
+    const portfolio = {
+      totalValue: 0,
+      equity: 0,
+      mutualFunds: 0,
+      fixedDeposits: 0,
+      cash: 0,
+      holdings: [] as any[]
+    };
+    
+    // Process each account
+    accounts.forEach(account => {
+      const balance = account.current_balance || 0;
+      portfolio.totalValue += balance;
+      
+      // Categorize by financial institution type
+      switch(account.fi_type) {
+        case 'stock':
+          portfolio.equity += balance;
+          break;
+        case 'mutual_fund':
+          portfolio.mutualFunds += balance;
+          break;
+        case 'deposit':
+          portfolio.fixedDeposits += balance;
+          break;
+        case 'bank':
+          portfolio.cash += balance;
+          break;
+        default:
+          // Default to cash for unknown types
+          portfolio.cash += balance;
+      }
+      
+      // Add to holdings list
+      portfolio.holdings.push({
+        id: account.id,
+        type: account.fi_type,
+        name: `${account.fi_name || 'Account'} - ${account.masked_account_number || account.account_id || 'Unknown'}`,
+        value: balance,
+        growth: 0, // We don't have growth data yet
+        account_id: account.id // Store the account ID for later use
+      });
+    });
+    
+    return portfolio;
   }
 };
 
 export default {
   auth: authService,
-  consent: consentService
+  consent: consentService,
+  financialData: financialDataService
 };

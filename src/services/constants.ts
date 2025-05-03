@@ -25,4 +25,9 @@ export const API_ENDPOINTS = {
   CREATE_CONSENT: '/api/consents',
   GET_CONSENT: '/api/consents', // + '/:id' for specific consent
   LIST_CONSENTS: '/api/consents',
+  FETCH_CONSENT_DATA: '/api/consents', // + '/:id/data' to initiate data fetch
+  
+  // Financial Data
+  GET_ACCOUNTS: '/api/consents', // + '/:id/accounts' to get accounts for a consent
+  GET_ACCOUNT_DETAILS: '/api/consents', // + '/:consent_id/accounts/:account_id' for details
 };
